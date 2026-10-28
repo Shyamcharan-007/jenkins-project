@@ -1,0 +1,104 @@
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven3'
+    }
+
+    stages {
+        stage('checkout') {
+            steps {
+                echo 'Cloning my GitHub repository'
+                git branch: 'testing',
+                    url: 'https://github.com/Shyamcharan-007/jenkins-project.git'
+            }
+        }
+
+        stage('sonar') {
+            steps {
+                echo 'Scanning project with SonarQube'
+                sh 'ls -ltr'
+
+                withCredentials([
+                    string(
+                        credentialsId: 'sonar-token',
+                        variable: 'SONAR_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        mvn sonar:sonar \
+                          -Dsonar.host.url=http://YOUR_SONARQUBE_SERVER:9000 \
+                          -Dsonar.token="$SONAR_TOKEN"
+                    '''
+                }
+            }
+        }
+
+        stage('Build Artifact') {
+            steps {
+                echo 'Building WAR artifact'
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Docker Image') {
+            steps {
+                echo 'Building Docker image'
+                sh 'docker build -t shyamcharan/jenkins-project:${BUILD_NUMBER} .'
+            }
+        }
+
+        stage('Push to Dockerhub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'shyamcharan',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set +x
+                        echo "$DOCKERHUB_TOKEN" | docker login \
+                          --username "$DOCKERHUB_USER" \
+                          --password-stdin
+
+                        docker push shyamcharan/jenkins-project:${BUILD_NUMBER}
+                        docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('Update Deployment File') {
+            environment {
+                GIT_REPO_NAME = 'jenkins-project'
+                GIT_USER_NAME = 'Shyamcharan-007'
+            }
+
+            steps {
+                echo 'Updating Kubernetes deployment image'
+
+                withCredentials([
+                    string(
+                        credentialsId: 'githubtoken',
+                        variable: 'GITHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        git config user.email "shyamragavan2006@gmail.com"
+                        git config user.name "Shyamcharan-007"
+
+                        sed -i "s|shyamcharan/jenkins-project:.*|shyamcharan/jenkins-project:${BUILD_NUMBER}|g" deploymentfiles/deployment.yml
+
+                        git add deploymentfiles/deployment.yml
+                        git commit -m "Update deployment image to version ${BUILD_NUMBER}"
+
+                        git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:testing
+                    '''
+                }
+            }
+        }
+    }
+}
+
