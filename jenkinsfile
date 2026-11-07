@@ -1,12 +1,13 @@
+
 pipeline {
     agent any
 
     tools {
         maven 'maven3'
     }
-
     stages {
-        stage('checkout') {
+
+        stage('Checkout') {
             steps {
                 echo 'Cloning my GitHub repository'
                 git branch: 'testing',
@@ -14,10 +15,9 @@ pipeline {
             }
         }
 
-        stage('sonar') {
+        stage('SonarQube Analysis') {
             steps {
                 echo 'Scanning project with SonarQube'
-                sh 'ls -ltr'
 
                 withCredentials([
                     string(
@@ -27,7 +27,7 @@ pipeline {
                 ]) {
                     sh '''
                         mvn sonar:sonar \
-                          -Dsonar.host.url=http://YOUR_SONARQUBE_SERVER:9000 \
+                          -Dsonar.host.url=http://127.193.75.1:9000 \
                           -Dsonar.token="$SONAR_TOKEN"
                     '''
                 }
@@ -48,14 +48,13 @@ pipeline {
             }
         }
 
-        stage('Push to Dockerhub') {
+        stage('Push to Docker Hub') {
             steps {
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'shyamcharan',
-                        passwordVariable: 'DOCKERHUB_TOKEN'
-                    )
+                        usernameVariable: 'dockerhub',
+                        passwordVariable: 'DOCKERHUB_TOKEN')
                 ]) {
                     sh '''
                         set +x
@@ -71,34 +70,30 @@ pipeline {
         }
 
         stage('Update Deployment File') {
-            environment {
-                GIT_REPO_NAME = 'jenkins-project'
-                GIT_USER_NAME = 'Shyamcharan-007'
-            }
-
             steps {
                 echo 'Updating Kubernetes deployment image'
 
-                withCredentials([
-                    string(
-                        credentialsId: 'githubtoken',
-                        variable: 'GITHUB_TOKEN'
-                    )
-                ]) {
-                    sh '''
-                        git config user.email "shyamragavan2006@gmail.com"
-                        git config user.name "Shyamcharan-007"
+                sh '''
+                    git config user.email "shyamragavan2006@gmail.com"
+                    git config user.name "Shyamcharan-007"
 
-                        sed -i "s|shyamcharan/jenkins-project:.*|shyamcharan/jenkins-project:${BUILD_NUMBER}|g" deploymentfiles/deployment.yml
+                    sed -i "s|image: shyamcharan/jenkins-project:.*|image: shyamcharan/jenkins-project:${BUILD_NUMBER}|" deploymentfiles/deployment.yml
 
-                        git add deploymentfiles/deployment.yml
+                    git add deploymentfiles/deployment.yml
+
+                    if ! git diff --cached --quiet; then
                         git commit -m "Update deployment image to version ${BUILD_NUMBER}"
+                    else
+                        echo "No deployment file changes"
+                    fi
+                '''
 
-                        git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:testing
-                    '''
+                withCredentials([
+                    gitUsernamePassword(
+                        credentialsId: 'githubtoken',)]) {
+                    sh 'git push origin HEAD:testing'
                 }
             }
         }
     }
 }
-
