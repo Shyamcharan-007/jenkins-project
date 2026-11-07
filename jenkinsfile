@@ -1,0 +1,99 @@
+
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven3'
+    }
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo 'Cloning my GitHub repository'
+                git branch: 'testing',
+                    url: 'https://github.com/Shyamcharan-007/jenkins-project.git'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                echo 'Scanning project with SonarQube'
+
+                withCredentials([
+                    string(
+                        credentialsId: 'sonar-token',
+                        variable: 'SONAR_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        mvn sonar:sonar \
+                          -Dsonar.host.url=http://127.193.75.1:9000 \
+                          -Dsonar.token="$SONAR_TOKEN"
+                    '''
+                }
+            }
+        }
+
+        stage('Build Artifact') {
+            steps {
+                echo 'Building WAR artifact'
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Docker Image') {
+            steps {
+                echo 'Building Docker image'
+                sh 'docker build -t shyamcharan/jenkins-project:${BUILD_NUMBER} .'
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'dockerhub',
+                        passwordVariable: 'DOCKERHUB_TOKEN')
+                ]) {
+                    sh '''
+                        set +x
+                        echo "$DOCKERHUB_TOKEN" | docker login \
+                          --username "$DOCKERHUB_USER" \
+                          --password-stdin
+
+                        docker push shyamcharan/jenkins-project:${BUILD_NUMBER}
+                        docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('Update Deployment File') {
+            steps {
+                echo 'Updating Kubernetes deployment image'
+
+                sh '''
+                    git config user.email "shyamragavan2006@gmail.com"
+                    git config user.name "Shyamcharan-007"
+
+                    sed -i "s|image: shyamcharan/jenkins-project:.*|image: shyamcharan/jenkins-project:${BUILD_NUMBER}|" deploymentfiles/deployment.yml
+
+                    git add deploymentfiles/deployment.yml
+
+                    if ! git diff --cached --quiet; then
+                        git commit -m "Update deployment image to version ${BUILD_NUMBER}"
+                    else
+                        echo "No deployment file changes"
+                    fi
+                '''
+
+                withCredentials([
+                    gitUsernamePassword(
+                        credentialsId: 'githubtoken',)]) {
+                    sh 'git push origin HEAD:testing'
+                }
+            }
+        }
+    }
+}
